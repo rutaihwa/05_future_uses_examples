@@ -2,10 +2,15 @@ extern crate failure;
 extern crate futures;
 extern crate tokio;
 
-use futures::{future, sync::mpsc, Future, IntoFuture, Sink, Stream};
+use futures::{
+    future,
+    sync::{mpsc, oneshot},
+    Future, IntoFuture, Sink, Stream,
+};
 
 fn main() {
     multiple();
+    single();
 }
 
 // Multi chanel senders and receivers
@@ -31,6 +36,21 @@ fn multiple() {
     .map(drop);
 
     drop(tx_sink);
+    tokio::run(execute_all);
+}
+
+// Single
+fn single() {
+    let (tx_sender, rx_future) = oneshot::channel::<u8>();
+
+    let receiver = rx_future.map(|x| {
+        println!("Received: {}", x);
+    });
+
+    let sender = tx_sender.send(8);
+
+    let execute_all = future::join_all(vec![to_box(receiver), to_box(sender)]).map(drop);
+
     tokio::run(execute_all);
 }
 
