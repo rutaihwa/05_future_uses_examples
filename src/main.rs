@@ -2,15 +2,27 @@ extern crate failure;
 extern crate futures;
 extern crate tokio;
 
+use failure::Error;
 use futures::{
     future,
     sync::{mpsc, oneshot},
     Future, IntoFuture, Sink, Stream,
 };
+use std::io;
+use tokio::{
+    codec::LinesCodec,
+    net::{UdpFramed, UdpSocket},
+};
 
 fn main() {
+    println!("Starting multiple");
     multiple();
+
+    println!("Starting single");
     single();
+
+    println!("Echoing alt_udp");
+    alt_udp_echo().unwrap();
 }
 
 // Multi chanel senders and receivers
@@ -54,6 +66,32 @@ fn single() {
     tokio::run(execute_all);
 }
 
+// Using channels
+
+fn alt_udp_echo() -> Result<(), Error> {
+    let from = "0.0.0.0:12345".parse()?;
+
+    let socket = UdpSocket::bind(&from)?;
+
+    let framed = UdpFramed::new(socket, LinesCodec::new());
+
+    let (sink, stream) = framed.split();
+
+    let (tx, rx) = mpsc::channel(16);
+
+    let rx = rx
+        .map_err(|_| other("can't take a message"))
+        .fold(sink, |sink, frame| sink.send(frame));
+
+    let process = stream
+        .and_then(move |args| tx.clone().send(args).map(drop).map_err(other))
+        .collect();
+
+    let execute_all = future::join_all(vec![to_box(rx), to_box(process)]).map(drop);
+
+    Ok(tokio::run(execute_all))
+}
+
 // Boxing
 fn to_box<T>(fut: T) -> Box<dyn Future<Item = (), Error = ()> + Send>
 where
@@ -64,4 +102,12 @@ where
 {
     let fut = fut.into_future().map(drop).map_err(drop);
     Box::new(fut)
+}
+
+// Wrapping errors
+fn other<E>(err: E) -> io::Error
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    io::Error::new(io::ErrorKind::Other, err)
 }
