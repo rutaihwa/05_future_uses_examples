@@ -4,7 +4,7 @@ extern crate tokio;
 
 use failure::Error;
 use futures::{
-    future,
+    future, stream,
     sync::{mpsc, oneshot},
     Future, IntoFuture, Sink, Stream,
 };
@@ -20,6 +20,8 @@ fn main() {
 
     println!("Starting single");
     single();
+
+    send_spawn();
 
     println!("Echoing alt_udp");
     alt_udp_echo().unwrap();
@@ -67,7 +69,6 @@ fn single() {
 }
 
 // Using channels
-
 fn alt_udp_echo() -> Result<(), Error> {
     let from = "0.0.0.0:12345".parse()?;
 
@@ -90,6 +91,29 @@ fn alt_udp_echo() -> Result<(), Error> {
     let execute_all = future::join_all(vec![to_box(rx), to_box(process)]).map(drop);
 
     Ok(tokio::run(execute_all))
+}
+
+// Futures with blocking streams - spawning
+fn send_spawn() {
+    let (tx_sink, rx_stream) = mpsc::channel::<u8>(8);
+
+    let receiver = rx_stream
+        .fold(0, |acc, value| {
+            println!("Received: {}", value);
+            future::ok(acc + value)
+        })
+        .map(drop);
+
+    let spawner = stream::iter_ok::<_, ()>(1u8..11u8)
+        .map(move |x| {
+            let fut = tx_sink.clone().send(x).map(drop).map_err(drop);
+            tokio::spawn(fut);
+        })
+        .collect();
+
+    let execute_all = future::join_all(vec![to_box(spawner), to_box(receiver)]).map(drop);
+
+    tokio::run(execute_all);
 }
 
 // Boxing
